@@ -79,5 +79,34 @@ class CostTracker:
         row = cursor.fetchone()
         return float(row[0]) if row else 0.0
 
+    def get_summary_by_model(self) -> list[dict]:
+        """Get cost summary grouped by model."""
+        cursor = self._conn.execute("""
+            SELECT model, COUNT(*) as calls, SUM(tokens_in) as total_in,
+                   SUM(tokens_out) as total_out, SUM(cost_usd) as total_cost,
+                   AVG(latency_ms) as avg_latency
+            FROM llm_costs GROUP BY model ORDER BY total_cost DESC
+        """)
+        return [
+            {
+                "model": row[0], "calls": row[1], "tokens_in": row[2],
+                "tokens_out": row[3], "cost_usd": float(row[4]),
+                "avg_latency_ms": float(row[5]),
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def get_summary_by_node(self) -> list[dict]:
+        """Get cost summary grouped by node."""
+        cursor = self._conn.execute("""
+            SELECT node, COUNT(*) as calls, SUM(tokens_in + tokens_out) as total_tokens,
+                   SUM(cost_usd) as total_cost
+            FROM llm_costs GROUP BY node ORDER BY total_cost DESC
+        """)
+        return [
+            {"node": row[0], "calls": row[1], "tokens": row[2], "cost_usd": float(row[3])}
+            for row in cursor.fetchall()
+        ]
+
     def close(self) -> None:
         self._conn.close()

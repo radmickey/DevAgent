@@ -1,4 +1,8 @@
-"""Enricher node: gathers context from multiple providers in parallel with degradation."""
+"""Enricher node: gathers context from multiple sources in parallel with graceful degradation.
+
+Uses asyncio.gather(return_exceptions=True) — never plain gather.
+Sets has_code_context, has_doc_context, has_similar_tasks flags.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from typing import Any
 import structlog
 
 from agent.pipeline.state import PipelineState
-from agent.providers.base import CodeProvider, DocProvider
+from agent.providers.base import CodeProvider, DocProvider, TaskProvider
 
 log = structlog.get_logger()
 
@@ -18,53 +22,74 @@ async def enricher_node(
     *,
     code_provider: CodeProvider,
     doc_provider: DocProvider,
+    task_provider: TaskProvider | None = None,
+    vector_memory: Any = None,
 ) -> PipelineState:
-    """Gather code + doc context in parallel. Gracefully degrade on failures."""
+    """Gather code + doc + task + vector context in parallel.
+
+    Uses gather(return_exceptions=True) for graceful degradation.
+    Each source that fails produces a warning, not a crash.
+    """
     task_raw = state.get("task_raw", {})
-    query = task_raw.get("title", "") or task_raw.get("free_text", "")
+    query = task_raw.get("title", "") or task_raw.get("free_text", "") or task_raw.get("description", "")
+    task_id = state.get("task_id", "")
 
-    warnings: list[str] = []
+    coros: dict[str, Any] = {
+        "code_snippets": code_provider.search_code(query),
+        "doc_pages": doc_provider.search_docs(query),
+    }
+
+    if task_provider is not None and task_id:
+        coros["task_comments"] = task_provider.get_comments(task_id)
+
+    if vector_memory is not None and query:
+        coros["similar_tasks"] = _query_vector(vector_memory, task_id, query)
+
+    keys = list(coros.keys())
+    results = await asyncio.gather(*coros.values(), return_exceptions=True)
+
     enriched: dict[str, Any] = {}
-
-    code_coro = _safe_search(code_provider.search_code(query), "code")
-    doc_coro = _safe_search(doc_provider.search_docs(query), "doc")
-
-    code_result, doc_result = await asyncio.gather(code_coro, doc_coro)
-
+    warnings: list[str] = []
     has_code = False
-    if isinstance(code_result, list) and len(code_result) > 0:
-        enriched["code_snippets"] = code_result
-        has_code = True
-    elif isinstance(code_result, str):
-        warnings.append(code_result)
-
     has_doc = False
-    if isinstance(doc_result, list) and len(doc_result) > 0:
-        enriched["doc_pages"] = doc_result
-        has_doc = True
-    elif isinstance(doc_result, str):
-        warnings.append(doc_result)
+    has_similar = False
+
+    for key, result in zip(keys, results):
+        if isinstance(result, BaseException):
+            warning_msg = f"{key} unavailable: {result}"
+            warnings.append(warning_msg)
+            log.warning("enricher_source_failed", source=key, error=str(result))
+            continue
+
+        if isinstance(result, list) and len(result) > 0:
+            enriched[key] = result
+            if key == "code_snippets":
+                has_code = True
+            elif key == "doc_pages":
+                has_doc = True
+            elif key == "similar_tasks":
+                has_similar = True
 
     log.info(
         "enricher_done",
         has_code=has_code,
         has_doc=has_doc,
+        has_similar=has_similar,
         warnings=len(warnings),
+        sources_ok=len(enriched),
     )
+
     return {
         **state,
         "enriched_context": enriched,
         "has_code_context": has_code,
         "has_doc_context": has_doc,
+        "has_similar_tasks": has_similar,
         "enrichment_warnings": warnings,
     }
 
 
-async def _safe_search(coro: Any, source: str) -> list[Any] | str:
-    """Run a search coroutine; return results or an error string."""
-    try:
-        result: list[Any] = await coro
-        return result
-    except Exception as exc:
-        log.warning("enricher_source_failed", source=source, error=str(exc))
-        return f"{source} unavailable: {exc}"
+async def _query_vector(vector_memory: Any, task_id: str, query: str) -> list[dict[str, Any]]:
+    """Query vector memory for similar tasks (sync call wrapped for gather)."""
+    result: list[dict[str, Any]] = vector_memory.query(task_id, query, n_results=5)
+    return result

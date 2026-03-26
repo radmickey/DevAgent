@@ -103,16 +103,20 @@ def _make_reader_wrapper():
 
 
 def _make_enricher_wrapper():
-    """Wrap enricher_node to inject code/doc providers from stubs."""
+    """Wrap enricher_node to inject code/doc/task providers from stubs."""
     from agent.pipeline.nodes.enricher import enricher_node
     from agent.providers.code.stub import StubCodeProvider
     from agent.providers.doc.stub import StubDocProvider
+    from agent.providers.task.stub import StubTaskProvider
 
     _code = StubCodeProvider()
     _doc = StubDocProvider()
+    _task = StubTaskProvider()
 
     async def wrapper(state: PipelineState) -> PipelineState:
-        return await enricher_node(state, code_provider=_code, doc_provider=_doc)
+        return await enricher_node(
+            state, code_provider=_code, doc_provider=_doc, task_provider=_task,
+        )
 
     return wrapper
 

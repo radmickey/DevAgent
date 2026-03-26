@@ -1,8 +1,13 @@
-"""Pydantic v2 models: TaskInfo, ExplainerResult, ExecutorResult, ReviewResult."""
+"""Pydantic v2 models: TaskInfo, ExplainerResult, ExecutorResult, ReviewResult, NodeDeps."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Any
+
 from pydantic import BaseModel, Field
+
+from agent.providers.base import CodeProvider, DocProvider, TaskProvider
 
 
 class TaskInfo(BaseModel):
@@ -70,3 +75,15 @@ class ReviewResult(BaseModel):
     tests_passed: bool | None = None
     static_analysis_passed: bool | None = None
     summary: str = ""
+
+
+@dataclass
+class NodeDeps:
+    """Dependency container injected via RunContext into Pydantic AI agents."""
+
+    task_provider: TaskProvider | None = None
+    code_provider: CodeProvider | None = None
+    doc_provider: DocProvider | None = None
+    effects_tracker: Any = None
+    task_id: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
