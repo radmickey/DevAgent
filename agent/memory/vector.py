@@ -34,24 +34,49 @@ class VectorMemory:
         ids = [f"{task_id}_{i}" for i in range(len(items))]
         documents = [item.get("content", str(item)) for item in items]
         now_ts = datetime.now(timezone.utc).timestamp()
-        metadatas: list[dict[str, str | int | float | bool]] = [
-            {
+        metadatas: list[dict[str, str | int | float | bool]] = []
+        for item in items:
+            meta: dict[str, str | int | float | bool] = {
                 "task_id": task_id,
                 "source": item.get("source", "unknown"),
                 "created_at": now_ts,
             }
-            for item in items
-        ]
+            if item.get("lang"):
+                meta["lang"] = item["lang"]
+            metadatas.append(meta)
 
         self._collection.upsert(ids=ids, documents=documents, metadatas=metadatas)  # type: ignore[arg-type]
         log.info("vector_stored", task_id=task_id, count=len(items))
 
-    def query(self, task_id: str, query_text: str, max_tokens: int = 500, n_results: int = 5) -> list[dict[str, Any]]:
-        """Query similar context. Returns items with score < threshold."""
-        results = self._collection.query(
-            query_texts=[query_text],
-            n_results=min(n_results, self._collection.count() or 1),
-        )
+    def query(
+        self,
+        task_id: str,
+        query_text: str,
+        max_tokens: int = 500,
+        n_results: int = 5,
+        lang: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query similar context. Returns items with score < threshold.
+
+        Args:
+            lang: Optional language filter (e.g. "python"). Filters by metadata.
+        """
+        where_filter = None
+        if lang:
+            where_filter = {"lang": lang}  # type: ignore[dict-item]
+
+        count = self._collection.count()
+        if count == 0:
+            return []
+
+        query_kwargs: dict[str, Any] = {
+            "query_texts": [query_text],
+            "n_results": min(n_results, count),
+        }
+        if where_filter:
+            query_kwargs["where"] = where_filter
+
+        results = self._collection.query(**query_kwargs)
 
         items = []
         if results and results["documents"]:

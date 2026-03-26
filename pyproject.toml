@@ -5,7 +5,54 @@ build-backend = "setuptools.backends._legacy:_Backend"
 [project]
 name = "devagent"
 version = "0.1.0"
+description = "DevAgent — AI-powered developer task automation"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "langgraph>=0.4.0",
+    "pydantic-ai>=0.2.0",
+    "pydantic>=2.0.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-ollama>=0.3.0",
+    "chromadb>=0.6.0",
+    "tenacity>=9.0.0",
+    "tiktoken>=0.9.0",
+    "typer>=0.15.0",
+    "rich>=13.0.0",
+    "structlog>=25.0.0",
+    "python-dotenv>=1.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "mypy>=1.0.0",
+    "ruff>=0.9.0",
+]
+observability = [
+    "logfire[pydantic-ai]",
+    "langsmith>=0.3.0",
+]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "sse-starlette>=2.0.0",
+]
+search = [
+    "tavily-python>=0.5.0",
+]
+build = [
+    "nuitka>=2.0",
+    "ordered-set>=4.0",
+]
+
+[project.scripts]
+devagent = "agent.interface.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agent*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

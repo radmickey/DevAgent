@@ -21,3 +21,6 @@ class PipelineState(TypedDict, total=False):
     review_result: dict[str, Any]
     iteration_count: int
     dry_run: bool
+    contracts: list[dict[str, Any]]
+    contract_violations: list[dict[str, Any]]
+    detected_languages: list[str]

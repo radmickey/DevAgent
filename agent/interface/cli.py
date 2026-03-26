@@ -55,5 +55,23 @@ def status() -> None:
     ct.close()
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
+    port: int = typer.Option(8000, "--port", help="Bind port"),
+) -> None:
+    """Start the web dashboard (FastAPI + SSE)."""
+    try:
+        import uvicorn
+        from agent.interface.web import create_app
+    except ImportError:
+        console.print("[red]Web dependencies not installed. Run: pip install 'devagent[web]'[/red]")
+        raise typer.Exit(1)
+
+    web_app = create_app()
+    console.print(f"[bold]DevAgent Web[/bold] → http://{host}:{port}")
+    uvicorn.run(web_app, host=host, port=port)
+
+
 def main() -> None:
     app()
