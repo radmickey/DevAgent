@@ -64,8 +64,14 @@ _STR_SETTINGS: dict[str, tuple[str, str]] = {
 # Settings YAML: persistent runtime overrides
 # ---------------------------------------------------------------------------
 
+_NON_SETTING_KEYS = frozenset({"models", "node_models"})
+
+
 def _load_settings_yaml(path: Path | None = None) -> dict[str, Any]:
-    """Load settings from ~/.devagent/settings.yaml."""
+    """Load settings from ~/.devagent/settings.yaml → settings: section.
+
+    Only returns boolean/string settings, never models or node_models.
+    """
     if path is None:
         path = SETTINGS_PATH
     if not path.exists():
@@ -73,22 +79,29 @@ def _load_settings_yaml(path: Path | None = None) -> dict[str, Any]:
     try:
         import yaml  # type: ignore[import-untyped]
         raw: dict[str, Any] = yaml.safe_load(path.read_text()) or {}
-        result: dict[str, Any] = raw.get("settings", raw)
-        return result
+        if "settings" in raw and isinstance(raw["settings"], dict):
+            result: dict[str, Any] = raw["settings"]
+        else:
+            result = {k: v for k, v in raw.items() if k not in _NON_SETTING_KEYS}
+        return {k: v for k, v in result.items() if k not in _NON_SETTING_KEYS}
     except Exception:
         return {}
 
 
 def _save_settings_yaml(settings: dict[str, Any], path: Path | None = None) -> None:
-    """Save settings to ~/.devagent/settings.yaml."""
+    """Save settings to ~/.devagent/settings.yaml → settings: section.
+
+    Never writes models/node_models inside settings.
+    """
     if path is None:
         path = SETTINGS_PATH
+    clean = {k: v for k, v in settings.items() if k not in _NON_SETTING_KEYS}
     try:
         import yaml  # type: ignore[import-untyped]
         existing: dict[str, Any] = {}
         if path.exists():
             existing = yaml.safe_load(path.read_text()) or {}
-        existing["settings"] = settings
+        existing["settings"] = clean
         path.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
     except ImportError:
         log.warning("settings_save_failed", reason="pyyaml not installed")
@@ -183,6 +196,210 @@ def _resolve_str(
         return env_val, f"env:{env_var}"
 
     return default, "default"
+
+
+# ---------------------------------------------------------------------------
+# LLM Model Config
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelConfig:
+    """Configuration for a custom LLM model."""
+
+    name: str
+    provider: str
+    model: str
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+def _load_models_yaml(path: Path | None = None) -> list[ModelConfig]:
+    """Load model configs from ~/.devagent/settings.yaml → models: section."""
+    if path is None:
+        path = SETTINGS_PATH
+    if not path.exists():
+        return []
+    try:
+        import yaml  # type: ignore[import-untyped]
+        raw: dict[str, Any] = yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        return []
+
+    models: list[ModelConfig] = []
+    for entry in raw.get("models", []):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name", "")
+        provider = entry.get("provider", "")
+        model = entry.get("model", "")
+        if not name or not model:
+            continue
+        base_url = _expand_env_vars(str(entry["base_url"])) if entry.get("base_url") else None
+        api_key = _expand_env_vars(str(entry["api_key"])) if entry.get("api_key") else None
+        models.append(ModelConfig(
+            name=str(name),
+            provider=str(provider) if provider else "openai-compatible",
+            model=str(model),
+            base_url=base_url,
+            api_key=api_key,
+        ))
+
+    if models:
+        log.info("models_loaded", count=len(models), names=[m.name for m in models])
+    return models
+
+
+def _load_node_models_yaml(path: Path | None = None) -> dict[str, str]:
+    """Load node→model mapping from ~/.devagent/settings.yaml → node_models: section."""
+    if path is None:
+        path = SETTINGS_PATH
+    if not path.exists():
+        return {}
+    try:
+        import yaml  # type: ignore[import-untyped]
+        raw: dict[str, Any] = yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        return {}
+
+    node_models_raw = raw.get("node_models", {})
+    if not isinstance(node_models_raw, dict):
+        return {}
+    result: dict[str, str] = {str(k): str(v) for k, v in node_models_raw.items() if v}
+    if result:
+        log.info("node_models_loaded", mappings=result)
+    return result
+
+
+def get_models() -> list[ModelConfig]:
+    """Get all configured custom models."""
+    return _load_models_yaml()
+
+
+def save_model(model: ModelConfig) -> ModelConfig:
+    """Add or update a model in settings.yaml. Upserts by name."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError("pyyaml not installed")
+
+    existing: dict[str, Any] = {}
+    if SETTINGS_PATH.exists():
+        existing = yaml.safe_load(SETTINGS_PATH.read_text()) or {}
+
+    models_list: list[dict[str, Any]] = existing.get("models", [])
+    if not isinstance(models_list, list):
+        models_list = []
+
+    entry: dict[str, Any] = {
+        "name": model.name,
+        "provider": model.provider,
+        "model": model.model,
+    }
+    if model.base_url:
+        entry["base_url"] = model.base_url
+    if model.api_key:
+        entry["api_key"] = model.api_key
+
+    replaced = False
+    for i, m in enumerate(models_list):
+        if isinstance(m, dict) and m.get("name") == model.name:
+            models_list[i] = entry
+            replaced = True
+            break
+    if not replaced:
+        models_list.append(entry)
+
+    existing["models"] = models_list
+    SETTINGS_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    _invalidate_config_cache()
+    log.info("model_saved", name=model.name, provider=model.provider)
+    return model
+
+
+def delete_model(name: str) -> bool:
+    """Remove a model from settings.yaml by name. Returns True if found."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError("pyyaml not installed")
+
+    if not SETTINGS_PATH.exists():
+        return False
+
+    existing: dict[str, Any] = yaml.safe_load(SETTINGS_PATH.read_text()) or {}
+    models_list: list[dict[str, Any]] = existing.get("models", [])
+    if not isinstance(models_list, list):
+        return False
+
+    new_list = [m for m in models_list if not (isinstance(m, dict) and m.get("name") == name)]
+    if len(new_list) == len(models_list):
+        return False
+
+    existing["models"] = new_list
+
+    node_models: dict[str, str] = existing.get("node_models", {})
+    if isinstance(node_models, dict):
+        cleaned = {k: v for k, v in node_models.items() if v != name}
+        if len(cleaned) != len(node_models):
+            existing["node_models"] = cleaned
+
+    SETTINGS_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    _invalidate_config_cache()
+    log.info("model_deleted", name=name)
+    return True
+
+
+def get_node_models() -> dict[str, str]:
+    """Get node→model alias mapping."""
+    return _load_node_models_yaml()
+
+
+def set_node_model(node: str, model_alias: str) -> dict[str, str]:
+    """Set the model alias for a pipeline node. Persists to settings.yaml."""
+    if not SETTINGS_PATH.exists():
+        SETTINGS_PATH.write_text("")
+    try:
+        import yaml  # type: ignore[import-untyped]
+        existing: dict[str, Any] = yaml.safe_load(SETTINGS_PATH.read_text()) or {}
+    except Exception:
+        existing = {}
+
+    if "node_models" not in existing:
+        existing["node_models"] = {}
+    existing["node_models"][node] = model_alias
+
+    try:
+        import yaml  # type: ignore[import-untyped]
+        SETTINGS_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    except Exception as exc:
+        log.warning("node_model_save_failed", error=str(exc))
+
+    _invalidate_config_cache()
+    log.info("node_model_set", node=node, model=model_alias)
+    return {"node": node, "model": model_alias}
+
+
+def delete_node_model(node: str) -> bool:
+    """Remove a per-node model override. Returns True if it existed."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return False
+
+    if not SETTINGS_PATH.exists():
+        return False
+
+    existing: dict[str, Any] = yaml.safe_load(SETTINGS_PATH.read_text()) or {}
+    node_models: dict[str, str] = existing.get("node_models", {})
+    if not isinstance(node_models, dict) or node not in node_models:
+        return False
+
+    del node_models[node]
+    existing["node_models"] = node_models
+    SETTINGS_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    _invalidate_config_cache()
+    log.info("node_model_deleted", node=node)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +543,85 @@ def _load_all_mcp_servers() -> list[MCPServerConfig]:
     return list(seen.values())
 
 
+MCP_YAML_PATH = DEVAGENT_HOME / "mcp_servers.yaml"
+
+
+def get_mcp_servers_raw() -> list[dict[str, Any]]:
+    """Return MCP servers as raw dicts (without env expansion, safe for UI display)."""
+    if not MCP_YAML_PATH.exists():
+        return []
+    try:
+        import yaml  # type: ignore[import-untyped]
+        raw: dict[str, Any] = yaml.safe_load(MCP_YAML_PATH.read_text()) or {}
+    except Exception:
+        return []
+    servers = raw.get("servers", [])
+    return [s for s in servers if isinstance(s, dict) and s.get("name")]
+
+
+def save_mcp_server(data: dict[str, Any]) -> dict[str, Any]:
+    """Add or update an MCP server in mcp_servers.yaml. Upserts by name."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError("pyyaml not installed")
+
+    existing: dict[str, Any] = {}
+    if MCP_YAML_PATH.exists():
+        existing = yaml.safe_load(MCP_YAML_PATH.read_text()) or {}
+
+    servers: list[dict[str, Any]] = existing.get("servers", [])
+    if not isinstance(servers, list):
+        servers = []
+
+    name = data.get("name", "")
+    if not name:
+        raise ValueError("MCP server must have a name")
+
+    entry: dict[str, Any] = {k: v for k, v in data.items() if v is not None and v != "" and v != []}
+
+    replaced = False
+    for i, s in enumerate(servers):
+        if isinstance(s, dict) and s.get("name") == name:
+            servers[i] = entry
+            replaced = True
+            break
+    if not replaced:
+        servers.append(entry)
+
+    existing["servers"] = servers
+    MCP_YAML_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    _invalidate_config_cache()
+    log.info("mcp_server_saved", name=name)
+    return entry
+
+
+def delete_mcp_server(name: str) -> bool:
+    """Remove an MCP server from mcp_servers.yaml by name."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return False
+
+    if not MCP_YAML_PATH.exists():
+        return False
+
+    existing: dict[str, Any] = yaml.safe_load(MCP_YAML_PATH.read_text()) or {}
+    servers: list[dict[str, Any]] = existing.get("servers", [])
+    if not isinstance(servers, list):
+        return False
+
+    new_list = [s for s in servers if not (isinstance(s, dict) and s.get("name") == name)]
+    if len(new_list) == len(servers):
+        return False
+
+    existing["servers"] = new_list
+    MCP_YAML_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    _invalidate_config_cache()
+    log.info("mcp_server_deleted", name=name)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Config dataclass (frozen, resolved from settings chain)
 # ---------------------------------------------------------------------------
@@ -362,6 +658,8 @@ class Config:
     env: str = field(default_factory=_make_str_resolver("env"))
     home: Path = field(default_factory=_get_devagent_home)
     mcp_servers: list[MCPServerConfig] = field(default_factory=_load_all_mcp_servers)
+    models: list[ModelConfig] = field(default_factory=_load_models_yaml)
+    node_models: dict[str, str] = field(default_factory=_load_node_models_yaml)
 
 
 _config_cache: Config | None = None
@@ -379,3 +677,8 @@ def _invalidate_config_cache() -> None:
     """Reset the config cache so next get_config() re-reads settings."""
     global _config_cache
     _config_cache = None
+    try:
+        from agent.llm import invalidate_registry
+        invalidate_registry()
+    except ImportError:
+        pass

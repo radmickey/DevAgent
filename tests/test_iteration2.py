@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -193,6 +196,31 @@ class TestRankerV2:
 # --- Dual LLM Tests ---
 
 class TestDualLLM:
+    def setup_method(self) -> None:
+        from agent.config import _invalidate_config_cache
+        from agent.llm import invalidate_registry
+        _invalidate_config_cache()
+        invalidate_registry()
+        self._orig_env: dict[str, str | None] = {}
+        for key in ("LLM_STRONG_MODEL", "LLM_FAST_MODEL"):
+            self._orig_env[key] = os.environ.pop(key, None)
+        import agent.config as _cfg
+        self._orig_path = _cfg.SETTINGS_PATH
+        _cfg.SETTINGS_PATH = Path("/tmp/_devagent_test_no_such_file.yaml")
+
+    def teardown_method(self) -> None:
+        import agent.config as _cfg
+        _cfg.SETTINGS_PATH = self._orig_path
+        for key, val in self._orig_env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        from agent.config import _invalidate_config_cache
+        from agent.llm import invalidate_registry
+        _invalidate_config_cache()
+        invalidate_registry()
+
     def test_fast_model_for_enricher(self):
         model = get_model_for_node("enricher")
         fast = get_fast_model()

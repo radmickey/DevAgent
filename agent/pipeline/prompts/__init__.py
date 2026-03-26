@@ -463,10 +463,15 @@ don't change anything.
 }
 
 
+_DEFAULT_PROMPTS: dict[str, str] = dict(PROMPTS)
+
+PROMPTS_YAML_PATH = DEVAGENT_HOME / "prompts.yaml"
+
+
 def _load_prompt_overrides(path: Path | None = None) -> dict[str, str]:
     """Load prompt overrides from ~/.devagent/prompts.yaml."""
     if path is None:
-        path = DEVAGENT_HOME / "prompts.yaml"
+        path = PROMPTS_YAML_PATH
 
     if not path.exists():
         return {}
@@ -512,3 +517,58 @@ def get_prompt(name: str) -> str:
             f"Unknown prompt '{name}'. Available: {sorted(PROMPTS.keys())}"
         )
     return PROMPTS[name]
+
+
+def get_all_prompts() -> dict[str, dict[str, Any]]:
+    """Return all prompts with metadata for UI display."""
+    overrides = _load_prompt_overrides()
+    result: dict[str, dict[str, Any]] = {}
+    for name, text in sorted(PROMPTS.items()):
+        result[name] = {
+            "preview": text[:120].replace("\n", " ") + ("..." if len(text) > 120 else ""),
+            "length": len(text),
+            "is_overridden": name in overrides,
+        }
+    return result
+
+
+def set_prompt_override(name: str, text: str) -> None:
+    """Save a prompt override to ~/.devagent/prompts.yaml and update in-memory."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        raise RuntimeError("pyyaml not installed")
+
+    existing: dict[str, Any] = {}
+    if PROMPTS_YAML_PATH.exists():
+        existing = yaml.safe_load(PROMPTS_YAML_PATH.read_text()) or {}
+
+    if "prompts" not in existing:
+        existing["prompts"] = {}
+    existing["prompts"][name] = text
+
+    PROMPTS_YAML_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    PROMPTS[name] = text
+    log.info("prompt_override_saved", name=name)
+
+
+def reset_prompt(name: str) -> None:
+    """Remove a prompt override and restore the default."""
+    if name in _DEFAULT_PROMPTS:
+        PROMPTS[name] = _DEFAULT_PROMPTS[name]
+
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return
+
+    if not PROMPTS_YAML_PATH.exists():
+        return
+
+    existing: dict[str, Any] = yaml.safe_load(PROMPTS_YAML_PATH.read_text()) or {}
+    prompts_section: dict[str, str] = existing.get("prompts", {})
+    if isinstance(prompts_section, dict) and name in prompts_section:
+        del prompts_section[name]
+        existing["prompts"] = prompts_section
+        PROMPTS_YAML_PATH.write_text(yaml.dump(existing, default_flow_style=False, sort_keys=True))
+    log.info("prompt_override_reset", name=name)

@@ -6,8 +6,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-app = typer.Typer(name="devagent", help="DevAgent — AI-powered developer task automation")
-config_app = typer.Typer(name="config", help="Manage DevAgent settings")
+app = typer.Typer(
+    name="devagent",
+    help="DevAgent — AI-powered developer task automation",
+    invoke_without_command=True,
+    no_args_is_help=True,
+)
+config_app = typer.Typer(name="config", help="Manage DevAgent settings", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 console = Console()
 
@@ -168,5 +173,70 @@ def config_reset(
         console.print(f"[dim]{name} has no override in settings.yaml[/dim]")
 
 
+@config_app.command("models")
+def config_models() -> None:
+    """Show configured LLM models."""
+    from agent.config import get_models
+
+    models = get_models()
+    if not models:
+        console.print("[dim]No custom models configured. Add them to ~/.devagent/settings.yaml[/dim]")
+        console.print(
+            "\n[dim]Example:\n"
+            "models:\n"
+            "  - name: my-gpt\n"
+            "    provider: openai\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${OPENAI_API_KEY}[/dim]"
+        )
+        return
+
+    table = Table(title="LLM Models", show_lines=True)
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Provider", style="bold")
+    table.add_column("Model", style="bold")
+    table.add_column("Base URL", style="dim")
+
+    for m in models:
+        table.add_row(m.name, m.provider, m.model, m.base_url or "default")
+
+    console.print(table)
+
+
+@config_app.command("node-models")
+def config_node_models() -> None:
+    """Show which model is assigned to each pipeline node."""
+    from agent.config import get_node_models
+    from agent.llm import _NODE_MODEL_MAP, resolve_model_name_for_node
+
+    node_models = get_node_models()
+
+    table = Table(title="Node → Model Mapping", show_lines=True)
+    table.add_column("Node", style="cyan", no_wrap=True)
+    table.add_column("Tier", style="dim")
+    table.add_column("Resolved Model", style="bold")
+    table.add_column("Override", style="dim")
+
+    for node in sorted(_NODE_MODEL_MAP):
+        tier = _NODE_MODEL_MAP[node]
+        resolved_str = resolve_model_name_for_node(node)
+        override = node_models.get(node, "")
+        override_style = f"[yellow]{override}[/yellow]" if override else ""
+        table.add_row(node, tier, resolved_str, override_style)
+
+    if "default_strong" in node_models or "default_fast" in node_models:
+        console.print()
+        if "default_strong" in node_models:
+            console.print(f"  default_strong = [yellow]{node_models['default_strong']}[/yellow]")
+        if "default_fast" in node_models:
+            console.print(f"  default_fast = [yellow]{node_models['default_fast']}[/yellow]")
+
+    console.print(table)
+
+
 def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()
