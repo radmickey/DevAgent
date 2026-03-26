@@ -5,12 +5,15 @@ Strategy from architecture:
 - Tests exist + fail → return to executor with errors
 - No tests → only ruff + mypy + LLM review with warning
 - Static analysis unavailable → only LLM review with warning
+
+Dynamically injects MCP tools classified as review from ToolCatalog.
 """
 
 from __future__ import annotations
 
 import asyncio
 import subprocess
+from typing import Any
 
 import structlog
 from pydantic_ai import Agent, RunContext
@@ -23,20 +26,74 @@ from agent.security.sanitizer import sanitize, should_sanitize
 
 log = structlog.get_logger()
 
-reviewer_agent = Agent(
-    "test",
-    output_type=ReviewResult,
-    system_prompt=REVIEWER_SYSTEM_PROMPT,
-    deps_type=NodeDeps,
-)
+
+def _create_reviewer_agent() -> Agent[NodeDeps, ReviewResult]:
+    """Create a fresh reviewer agent with static tools."""
+    agent: Agent[NodeDeps, ReviewResult] = Agent(
+        "test",
+        output_type=ReviewResult,
+        system_prompt=REVIEWER_SYSTEM_PROMPT,
+        deps_type=NodeDeps,
+    )
+
+    @agent.tool
+    async def get_file_content(ctx: RunContext[NodeDeps], path: str) -> str:
+        """Read a file for review context."""
+        if ctx.deps.code_provider:
+            return await ctx.deps.code_provider.get_file(path)
+        return f"Cannot read: {path}"
+
+    return agent
 
 
-@reviewer_agent.tool
-async def get_file_content(ctx: RunContext[NodeDeps], path: str) -> str:
-    """Read a file for review context."""
-    if ctx.deps.code_provider:
-        return await ctx.deps.code_provider.get_file(path)
-    return f"Cannot read: {path}"
+reviewer_agent = _create_reviewer_agent()
+
+
+def _inject_review_tools(agent: Agent[NodeDeps, ReviewResult], catalog: Any) -> None:
+    """Inject MCP tools classified as 'review' into the reviewer agent."""
+    from agent.providers.mcp_classifier import ToolStage
+    from agent.providers.tool_catalog import CatalogTool
+
+    tools: list[CatalogTool] = catalog.get_tools_for_stage(ToolStage.REVIEW)
+    for ct in tools:
+        _register_dynamic_review_tool(agent, catalog, ct)
+    if tools:
+        log.info("mcp_review_tools_injected", count=len(tools),
+                 tools=[t.name for t in tools])
+
+
+def _register_dynamic_review_tool(
+    agent: Agent[NodeDeps, ReviewResult],
+    catalog: Any,
+    ct: Any,
+) -> None:
+    """Register a single MCP review tool on the reviewer agent."""
+    server = ct.server
+    tool_name = ct.name
+    description = ct.description or f"MCP tool: {tool_name}"
+
+    @agent.tool(name=f"mcp_{server}_{tool_name}")
+    async def _dynamic_review_tool(
+        ctx: RunContext[NodeDeps],
+        arguments: str = "{}",
+        _server: str = server,
+        _tool: str = tool_name,
+    ) -> str:
+        """Call an MCP review tool. Pass arguments as JSON string."""
+        import json
+        try:
+            args = json.loads(arguments) if arguments else {}
+        except (json.JSONDecodeError, ValueError):
+            args = {"input": arguments}
+        cat = ctx.deps.tool_catalog
+        if cat is None:
+            return f"Tool catalog not available for {_tool}"
+        result = await cat.call_tool_safe(_server, _tool, args, default=None)
+        if result is None:
+            return f"Tool {_tool} returned no result."
+        return str(result)[:2000]
+
+    _dynamic_review_tool.__doc__ = description
 
 
 async def reviewer_node(state: PipelineState, *, deps: NodeDeps | None = None) -> PipelineState:
@@ -88,9 +145,13 @@ async def reviewer_node(state: PipelineState, *, deps: NodeDeps | None = None) -
     if deps is None:
         deps = NodeDeps(task_id=task_id)
 
+    agent = _create_reviewer_agent()
+    if deps.tool_catalog is not None:
+        _inject_review_tools(agent, deps.tool_catalog)
+
     try:
         model = get_model_for_node("reviewer")
-        result = await reviewer_agent.run(prompt, deps=deps, model=model)
+        result = await agent.run(prompt, deps=deps, model=model)
         review = result.output
         review.tests_passed = tests_passed
         review.static_analysis_passed = static_ok

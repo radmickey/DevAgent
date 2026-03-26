@@ -7,9 +7,8 @@ import pytest
 from agent.providers.task.stub import StubTaskProvider
 from agent.providers.code.stub import StubCodeProvider
 from agent.providers.doc.stub import StubDocProvider
-from agent.providers.registry import build_providers
+from agent.providers.registry import get_stub_providers
 from agent.providers.code.language_detector import build_language_map
-from agent.errors import PermanentError
 
 
 class TestStubProviders:
@@ -40,19 +39,11 @@ class TestStubProviders:
 
 
 class TestProviderRegistry:
-    def test_build_providers_with_stubs(self):
-        from agent.config import Config
-        config = Config(task_provider="stub", code_provider="stub", doc_provider="stub")
-        task, code, doc = build_providers(config)
+    def test_get_stub_providers(self):
+        task, code, doc = get_stub_providers()
         assert isinstance(task, StubTaskProvider)
         assert isinstance(code, StubCodeProvider)
         assert isinstance(doc, StubDocProvider)
-
-    def test_build_providers_unknown_raises(self):
-        from agent.config import Config
-        config = Config(task_provider="nonexistent", code_provider="stub", doc_provider="stub")
-        with pytest.raises(PermanentError, match="Unknown task provider"):
-            build_providers(config)
 
 
 class TestLanguageDetector:

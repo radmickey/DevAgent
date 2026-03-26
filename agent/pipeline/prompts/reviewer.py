@@ -4,16 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-REVIEWER_SYSTEM_PROMPT = """\
-You are a senior code reviewer. Review the code changes for:
-1. Correctness — does the code do what the plan intended?
-2. Edge cases — are error paths handled?
-3. Style — does it follow the codebase conventions?
-4. Security — any injection, secret leakage, or auth issues?
-5. Tests — are changes covered by tests?
+from agent.pipeline.prompts import get_prompt
 
-Be constructive. Approve if changes are good, reject with specific findings if not.
-"""
+REVIEWER_SYSTEM_PROMPT = get_prompt("reviewer")
 
 
 def build_reviewer_prompt(

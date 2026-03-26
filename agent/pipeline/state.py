@@ -13,6 +13,7 @@ class PipelineState(TypedDict, total=False):
     has_code_context: bool
     has_doc_context: bool
     has_similar_tasks: bool
+    has_diff_context: bool
     enrichment_warnings: list[str]
     plan: Any
     plan_approved: bool

@@ -1,25 +1,38 @@
-"""Meta-Agent: Self-Evolution L1 — analyzes task outcomes and updates prompts.
+"""Meta-Agent: Self-Evolution L1+L2 — analyzes task outcomes and updates prompts.
 
 Strategy:
-1. After each task completion, Meta-Agent reviews:
-   - Was the plan approved on first try or required HITL iterations?
-   - Did the reviewer approve on first pass?
-   - Were there recurring review findings?
-2. If patterns indicate prompt weakness, it generates an improved prompt
-   and saves it with full versioning (SHA256 hash + timestamp).
-3. All prompt updates are reversible via rollback.
+L1 (rule-based, always available):
+  1. After each task completion, Meta-Agent reviews:
+     - Was the plan approved on first try or required HITL iterations?
+     - Did the reviewer approve on first pass?
+     - Were there recurring review findings?
+  2. If patterns indicate prompt weakness, it proposes an improved prompt.
+
+L2 (LLM-based, optional):
+  Uses the meta_agent system prompt to analyze outcomes and propose
+  targeted prompt improvements with reasoning.
+
+Both levels:
+  3. All prompt updates are saved with full versioning (SHA256 hash + timestamp).
+  4. All prompt updates are reversible via rollback.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
+from pydantic_ai import Agent
 
+from agent.llm import get_model_for_node
 from agent.memory.longterm import LongtermMemory
+from agent.pipeline.prompts import PROMPTS, get_prompt
 
 log = structlog.get_logger()
+
+META_AGENT_SYSTEM_PROMPT = get_prompt("meta_agent")
 
 
 class PromptUpdate(BaseModel):
@@ -40,9 +53,11 @@ async def maybe_update_prompts(
     feedback: str,
     task_outcome: dict[str, Any] | None = None,
     longterm: LongtermMemory | None = None,
+    use_llm: bool = False,
 ) -> list[PromptUpdate]:
     """Analyze task feedback and outcome, propose prompt improvements.
 
+    L1 (rule-based) runs always. L2 (LLM) runs when use_llm=True.
     Only applies updates above the confidence threshold.
     Returns list of applied updates (may be empty).
     """
@@ -51,6 +66,10 @@ async def maybe_update_prompts(
         return []
 
     updates = _analyze_outcome(task_id, feedback, task_outcome or {})
+
+    if use_llm:
+        llm_updates = await _analyze_outcome_llm(task_id, feedback, task_outcome or {})
+        updates.extend(llm_updates)
 
     if not updates:
         log.info("meta_agent_no_updates", task_id=task_id)
@@ -94,13 +113,68 @@ async def maybe_update_prompts(
     return applied
 
 
+async def _analyze_outcome_llm(
+    task_id: str, feedback: str, outcome: dict[str, Any],
+) -> list[PromptUpdate]:
+    """L2: Use LLM with meta_agent prompt to propose prompt updates."""
+    nodes_to_evaluate = ["explainer", "executor", "reviewer"]
+    updates: list[PromptUpdate] = []
+
+    for node_name in nodes_to_evaluate:
+        current_prompt = PROMPTS.get(node_name, "")
+        if not current_prompt:
+            continue
+
+        user_prompt = _build_meta_agent_prompt(node_name, current_prompt, outcome, feedback)
+        try:
+            agent: Agent[None, str] = Agent(
+                "test",
+                output_type=str,
+                system_prompt=META_AGENT_SYSTEM_PROMPT,
+            )
+            model = get_model_for_node("meta_agent")
+            result = await agent.run(user_prompt, model=model)
+            parsed = json.loads(result.output)
+
+            if parsed.get("should_update") and parsed.get("suggested_prompt"):
+                updates.append(PromptUpdate(
+                    node=node_name,
+                    new_prompt=parsed["suggested_prompt"],
+                    reason=parsed.get("reason", "LLM-suggested improvement"),
+                    confidence=0.75,
+                ))
+                log.info(
+                    "meta_agent_llm_suggestion",
+                    node=node_name,
+                    reason=parsed.get("reason", ""),
+                    changes=parsed.get("changes_summary", ""),
+                )
+        except Exception as exc:
+            log.warning("meta_agent_llm_failed", node=node_name, error=str(exc))
+
+    return updates
+
+
+def _build_meta_agent_prompt(
+    node_name: str,
+    current_prompt: str,
+    outcome: dict[str, Any],
+    feedback: str,
+) -> str:
+    """Build user prompt for meta-agent LLM evaluation."""
+    return (
+        f"## Node: {node_name}\n\n"
+        f"## Current prompt\n```\n{current_prompt[:3000]}\n```\n\n"
+        f"## Recent outcome\n```json\n{json.dumps(outcome, default=str)[:2000]}\n```\n\n"
+        f"## User feedback\n{feedback[:500] if feedback else 'No feedback.'}\n\n"
+        "Evaluate whether the prompt needs updating based on this outcome."
+    )
+
+
 def _analyze_outcome(
     task_id: str, feedback: str, outcome: dict[str, Any]
 ) -> list[PromptUpdate]:
-    """Analyze outcome and feedback to produce prompt update candidates.
-
-    This is a rule-based analysis (L1). Future iterations will use LLM.
-    """
+    """L1: rule-based analysis of outcome to produce prompt update candidates."""
     updates: list[PromptUpdate] = []
 
     review = outcome.get("review_result", {})
@@ -161,16 +235,7 @@ def _analyze_outcome(
 
 def _add_instruction(node: str, instruction: str) -> str:
     """Create an augmented prompt by adding an instruction to the base prompt."""
-    from agent.pipeline.prompts.explainer import EXPLAINER_SYSTEM_PROMPT
-    from agent.pipeline.prompts.executor import EXECUTOR_SYSTEM_PROMPT
-    from agent.pipeline.prompts.reviewer import REVIEWER_SYSTEM_PROMPT
-
-    base_prompts = {
-        "explainer": EXPLAINER_SYSTEM_PROMPT,
-        "executor": EXECUTOR_SYSTEM_PROMPT,
-        "reviewer": REVIEWER_SYSTEM_PROMPT,
-    }
-    base = base_prompts.get(node, "")
+    base = PROMPTS.get(node, "")
     return f"{base}\n\nAdditional instruction: {instruction}"
 
 

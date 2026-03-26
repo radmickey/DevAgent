@@ -25,6 +25,7 @@ _NODE_MODEL_MAP: dict[str, str] = {
     "executor": "strong",
     "reviewer": "strong",
     "doc_writer": "fast",
+    "pattern_extractor": "strong",
     "meta_agent": "strong",
 }
 

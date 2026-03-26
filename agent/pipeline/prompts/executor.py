@@ -4,15 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-EXECUTOR_SYSTEM_PROMPT = """\
-You are a senior software engineer executing a plan. For each step:
-1. Write the actual code changes needed
-2. Specify exact file paths and actions (create/modify/delete)
-3. Track all side effects (branches, commits, file writes)
-4. If a step cannot be completed, explain why
+from agent.pipeline.prompts import get_prompt
 
-Be precise. Write production-quality code.
-"""
+EXECUTOR_SYSTEM_PROMPT = get_prompt("executor")
 
 
 def build_executor_prompt(plan: dict[str, Any], task_raw: dict[str, Any]) -> str:

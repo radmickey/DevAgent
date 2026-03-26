@@ -87,3 +87,4 @@ class NodeDeps:
     effects_tracker: Any = None
     task_id: str = ""
     context: dict[str, Any] = field(default_factory=dict)
+    tool_catalog: Any = None

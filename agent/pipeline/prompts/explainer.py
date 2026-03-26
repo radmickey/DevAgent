@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
+from agent.pipeline.prompts import get_prompt
 from agent.pipeline.state import PipelineState
 
-EXPLAINER_SYSTEM_PROMPT = """\
-You are an expert software architect. Given a task and its context, produce \
-a detailed execution plan with concrete steps.
-
-Rules:
-- Each step must specify: description, file_path (if applicable), action (create/modify/delete/run), rationale
-- Estimate complexity as low/medium/high
-- List risks that could block execution
-- Be specific about file paths and what changes are needed
-- If context is limited, note what assumptions you're making
-"""
+EXPLAINER_SYSTEM_PROMPT = get_prompt("explainer")
 
 
 def build_explainer_prompt(state: PipelineState) -> str:
