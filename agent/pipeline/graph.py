@@ -43,14 +43,10 @@ def build_pipeline() -> tuple:  # type: ignore[type-arg]
     """Build and compile the LangGraph pipeline.
 
     Returns (compiled_graph, config_dict).
-    The graph uses stubs — real node functions are wired in at runtime.
     """
     from agent.pipeline.nodes.doc_writer import doc_writer_node
-    from agent.pipeline.nodes.executor import executor_node
-    from agent.pipeline.nodes.explainer import explainer_node
     from agent.pipeline.nodes.input_router import input_router_node
     from agent.pipeline.nodes.ranker import ranker_node
-    from agent.pipeline.nodes.reviewer import reviewer_node
 
     workflow = StateGraph(PipelineState)
 
@@ -58,10 +54,10 @@ def build_pipeline() -> tuple:  # type: ignore[type-arg]
     workflow.add_node("reader", _make_reader_wrapper())
     workflow.add_node("enricher", _make_enricher_wrapper())
     workflow.add_node("ranker", ranker_node)
-    workflow.add_node("explainer", explainer_node)
+    workflow.add_node("explainer", _make_explainer_wrapper())
     workflow.add_node("hitl", _hitl_passthrough)
-    workflow.add_node("executor", executor_node)
-    workflow.add_node("reviewer", reviewer_node)
+    workflow.add_node("executor", _make_executor_wrapper())
+    workflow.add_node("reviewer", _make_reviewer_wrapper())
     workflow.add_node("doc_writer", doc_writer_node)
 
     workflow.set_entry_point("input_router")
@@ -117,6 +113,57 @@ def _make_enricher_wrapper():
         return await enricher_node(
             state, code_provider=_code, doc_provider=_doc, task_provider=_task,
         )
+
+    return wrapper
+
+
+def _make_explainer_wrapper():
+    """Wrap explainer_node with NodeDeps."""
+    from agent.pipeline.models import NodeDeps
+    from agent.pipeline.nodes.explainer import explainer_node
+
+    async def wrapper(state: PipelineState) -> PipelineState:
+        deps = NodeDeps(task_id=state.get("task_id", ""))
+        return await explainer_node(state, deps=deps)
+
+    return wrapper
+
+
+def _make_executor_wrapper():
+    """Wrap executor_node with NodeDeps and SideEffectTracker."""
+    from agent.memory.effects import SideEffectTracker
+    from agent.pipeline.models import NodeDeps
+    from agent.pipeline.nodes.executor import executor_node
+    from agent.providers.code.stub import StubCodeProvider
+
+    _code = StubCodeProvider()
+    _tracker = SideEffectTracker()
+
+    async def wrapper(state: PipelineState) -> PipelineState:
+        deps = NodeDeps(
+            task_id=state.get("task_id", ""),
+            code_provider=_code,
+            effects_tracker=_tracker,
+        )
+        return await executor_node(state, deps=deps)
+
+    return wrapper
+
+
+def _make_reviewer_wrapper():
+    """Wrap reviewer_node with NodeDeps."""
+    from agent.pipeline.models import NodeDeps
+    from agent.pipeline.nodes.reviewer import reviewer_node
+    from agent.providers.code.stub import StubCodeProvider
+
+    _code = StubCodeProvider()
+
+    async def wrapper(state: PipelineState) -> PipelineState:
+        deps = NodeDeps(
+            task_id=state.get("task_id", ""),
+            code_provider=_code,
+        )
+        return await reviewer_node(state, deps=deps)
 
     return wrapper
 

@@ -1,10 +1,9 @@
 """Iteration 2 smoke test."""
 
-import asyncio
 import tempfile
 
 from agent.memory.vector import VectorMemory
-from agent.memory.budget import fit_context, count_tokens
+from agent.memory.budget import count_tokens
 from agent.memory.cost import CostTracker
 
 with tempfile.TemporaryDirectory() as tmpdir:

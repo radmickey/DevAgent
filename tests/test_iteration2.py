@@ -336,13 +336,13 @@ class TestSubAgentStructure:
         assert CodeSearchResult is not None
 
     def test_doc_search_agent_exists(self):
-        from agent.skills.doc_search import doc_search_agent, DocSearchResult
+        from agent.skills.doc_search import doc_search_agent
         assert doc_search_agent is not None
 
     def test_task_search_agent_exists(self):
-        from agent.skills.task_search import task_search_agent, TaskSearchResult
+        from agent.skills.task_search import task_search_agent
         assert task_search_agent is not None
 
     def test_diff_agent_exists(self):
-        from agent.skills.diff_agent import diff_agent, DiffAnalysisResult
+        from agent.skills.diff_agent import diff_agent
         assert diff_agent is not None

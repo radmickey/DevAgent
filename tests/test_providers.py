@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import patch
 
-from agent.providers.base import TaskProvider, CodeProvider, DocProvider
 from agent.providers.task.stub import StubTaskProvider
 from agent.providers.code.stub import StubCodeProvider
 from agent.providers.doc.stub import StubDocProvider

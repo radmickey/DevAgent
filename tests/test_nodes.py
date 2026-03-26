@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock
 
-from agent.pipeline.state import PipelineState
 from agent.pipeline.nodes.input_router import input_router_node
 from agent.pipeline.nodes.reader import reader_node
 from agent.pipeline.nodes.enricher import enricher_node
@@ -59,7 +57,7 @@ class TestReader:
     @pytest.mark.asyncio
     async def test_skips_without_task_id(self, base_state, mock_task_provider):
         state = {**base_state, "task_id": ""}
-        result = await reader_node(state, task_provider=mock_task_provider)
+        await reader_node(state, task_provider=mock_task_provider)
         mock_task_provider.get_task.assert_not_called()
 
     @pytest.mark.asyncio
