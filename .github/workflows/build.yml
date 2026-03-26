@@ -39,6 +39,7 @@ jobs:
           pip install -e .
           pip install nuitka ordered-set
       - name: Build binary
+        shell: bash
         run: |
           python -m nuitka \
             --standalone \
