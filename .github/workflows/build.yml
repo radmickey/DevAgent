@@ -45,7 +45,7 @@ jobs:
             --standalone \
             --onefile \
             --assume-yes-for-downloads \
-            --lto=yes \
+            --lto=no \
             --output-filename=devagent \
             --include-package=agent \
             --include-package-data=agent \
@@ -55,6 +55,20 @@ jobs:
             --nofollow-import-to=torch \
             --nofollow-import-to=trio.testing \
             --nofollow-import-to=google.genai \
+            --nofollow-import-to=chromadb \
+            --nofollow-import-to=onnxruntime \
+            --nofollow-import-to=numpy \
+            --nofollow-import-to=boto3 \
+            --nofollow-import-to=botocore \
+            --nofollow-import-to=s3transfer \
+            --nofollow-import-to=pygments \
+            --nofollow-import-to=logfire \
+            --nofollow-import-to=opentelemetry \
+            --nofollow-import-to=cohere \
+            --nofollow-import-to=xai_sdk \
+            --nofollow-import-to=huggingface_hub \
+            --nofollow-import-to=tokenizers \
+            --nofollow-import-to=grpc \
             agent/interface/cli.py
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -44,3 +44,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+*devagent.bin
+*devagent.exe
+devagent
